@@ -16,7 +16,7 @@ let layerGroups = {};
 
 const API = "http://217.160.247.18:8000";
 
-fetch(`${API}/places`)
+fetch(`${API}/layers`)
   .then(res => res.json())
   .then(layers => {
 
