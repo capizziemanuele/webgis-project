@@ -14,7 +14,9 @@ let layerGroups = {};
 // LOAD LAYERS
 // -------------------------
 
-fetch("http://127.0.0.1:8000/layers")
+const API = "http://217.160.247.18:8000";
+
+fetch(`${API}/places`)
   .then(res => res.json())
   .then(layers => {
 
@@ -24,7 +26,7 @@ fetch("http://127.0.0.1:8000/layers")
 
     layers.forEach(layer => {
 
-      fetch(`http://127.0.0.1:8000/layers/${layer.id}`)
+      fetch("http://217.160.247.18:8000/layers")
         .then(res => res.json())
         .then(res => {
 
