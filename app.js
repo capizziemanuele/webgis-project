@@ -120,7 +120,16 @@ function createLayerPanel(layers) {
       });
 
       zoomBtn.addEventListener("click", () => {
+
+        const g = layerGroups["main"];
+
+        if (!g || !g.layer) {
+          console.error("Layer not found");
+          return;
+        }
+
         map.fitBounds(g.layer.getBounds());
+
       });
 
     }, 0);
