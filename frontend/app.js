@@ -1,6 +1,6 @@
 console.log("JS loaded");
 
-var map = L.map('map').setView([45.46, 9.19], 12);
+const map = L.map('map').setView([45.46, 9.19], 12);
 
 // BASE MAP
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -10,29 +10,25 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // store layers
 let layerGroups = {};
 
-// -------------------------
-// API BASE
-// -------------------------
+// API
 const API = "http://217.160.247.18:8000";
 
 // -------------------------
-// LOAD LAYERS
+// LOAD GEOJSON
 // -------------------------
 fetch(`${API}/layers`)
   .then(res => res.json())
-  .then(layers => {
+  .then(data => {
 
-    console.log("LAYERS:", layers);
+    console.log("GEOJSON:", data);
 
-    createLayerPanel([{ id: "main", name: "GeoJSON Layer" }]);
+    const geoLayer = L.geoJSON(data, {
 
-    // ✅ FIX: use GeoJSON directly
-    let geoLayer = L.geoJSON(layers, {
+      pointToLayer: (feature, latlng) => {
 
-      pointToLayer: function (feature, latlng) {
+        const type = feature.properties?.type;
 
-        // PARCO
-        if (feature.properties?.type === "parks") {
+        if (type === "parks") {
           return L.circleMarker(latlng, {
             radius: 7,
             color: "green",
@@ -41,8 +37,7 @@ fetch(`${API}/layers`)
           });
         }
 
-        // CITTA'
-        if (feature.properties?.type === "cities") {
+        if (type === "cities") {
           return L.circleMarker(latlng, {
             radius: 7,
             color: "red",
@@ -51,34 +46,33 @@ fetch(`${API}/layers`)
           });
         }
 
-        // default
         return L.circleMarker(latlng, {
           radius: 6,
-          color: "blue"
+          color: "blue",
+          fillOpacity: 0.6
         });
       },
 
-      onEachFeature: function (feature, layer) {
-        if (feature.properties?.name) {
-          layer.bindPopup(feature.properties.name);
-        }
+      onEachFeature: (feature, layer) => {
+        const name = feature.properties?.name;
+        if (name) layer.bindPopup(name);
       }
 
-    }).addTo(map);
+    });
 
-    // store layer
-    layerGroups["main"] = {
-      layer: geoLayer,
-      visible: true
-    };
+    geoLayer.addTo(map);
+
+    layerGroups["main"] = geoLayer;
+
+    createLayerPanel();
 
   });
 
 
 // -------------------------
-// UI PANEL (SIMPLIFIED)
+// UI PANEL (CLEAN)
 // -------------------------
-function createLayerPanel(layers) {
+function createLayerPanel() {
 
   const panel = L.control({ position: "topright" });
 
@@ -94,6 +88,9 @@ function createLayerPanel(layers) {
     div.innerHTML = "<b>Layers</b><br><br>";
 
     const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "6px";
 
     row.innerHTML = `
       <input type="checkbox" id="chk-main" checked>
@@ -108,27 +105,28 @@ function createLayerPanel(layers) {
       const chk = document.getElementById("chk-main");
       const zoomBtn = document.getElementById("zoom-main");
 
+      // toggle layer
       chk.addEventListener("change", () => {
-        const g = layerGroups["main"];
-        if (!g) return;
+
+        const layer = layerGroups["main"];
+
+        if (!layer) return;
 
         if (chk.checked) {
-          map.addLayer(g.layer);
+          map.addLayer(layer);
         } else {
-          map.removeLayer(g.layer);
+          map.removeLayer(layer);
         }
       });
 
+      // zoom
       zoomBtn.addEventListener("click", () => {
 
-        const g = layerGroups["main"];
+        const layer = layerGroups["main"];
 
-        if (!g || !g.layer) {
-          console.error("Layer not found");
-          return;
-        }
+        if (!layer) return;
 
-        map.fitBounds(g.layer.getBounds());
+        map.fitBounds(layer.getBounds());
 
       });
 
