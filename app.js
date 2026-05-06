@@ -11,86 +11,73 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let layerGroups = {};
 
 // -------------------------
-// LOAD LAYERS
+// API BASE
 // -------------------------
-
 const API = "http://217.160.247.18:8000";
 
+// -------------------------
+// LOAD LAYERS
+// -------------------------
 fetch(`${API}/layers`)
   .then(res => res.json())
   .then(layers => {
 
     console.log("LAYERS:", layers);
 
-    createLayerPanel(layers);
+    createLayerPanel([{ id: "main", name: "GeoJSON Layer" }]);
 
-    layers.forEach(layer => {
+    // ✅ FIX: use GeoJSON directly
+    let geoLayer = L.geoJSON(layers, {
 
-      fetch("http://217.160.247.18:8000/layers")
-        .then(res => res.json())
-        .then(res => {
+      pointToLayer: function (feature, latlng) {
 
-          console.log("DATA:", res);
-
-          let geoLayer = L.geoJSON(res.data, {
-
-            pointToLayer: function (feature, latlng) {
-
-              // PARCO
-              if (layer.name === "parks") {
-                return L.circleMarker(latlng, {
-                  radius: 7,
-                  color: "green",
-                  fillColor: "green",
-                  fillOpacity: 0.7
-                });
-              }
-
-              // CITTA'
-              if (layer.name === "cities") {
-                return L.circleMarker(latlng, {
-                  radius: 7,
-                  color: "red",
-                  fillColor: "red",
-                  fillOpacity: 0.7
-                });
-              }
-
-              // default fallback
-              return L.circleMarker(latlng, {
-                radius: 6,
-                color: "blue"
-              });
-
-            },
-
-            onEachFeature: function (feature, layer) {
-              if (feature.properties?.name) {
-                layer.bindPopup(feature.properties.name);
-              }
-            }
-
+        // PARCO
+        if (feature.properties?.type === "parks") {
+          return L.circleMarker(latlng, {
+            radius: 7,
+            color: "green",
+            fillColor: "green",
+            fillOpacity: 0.7
           });
+        }
 
-          layerGroups[layer.id] = {
-            layer: geoLayer,
-            bbox: res.bbox,
-            visible: true
-          };
+        // CITTA'
+        if (feature.properties?.type === "cities") {
+          return L.circleMarker(latlng, {
+            radius: 7,
+            color: "red",
+            fillColor: "red",
+            fillOpacity: 0.7
+          });
+        }
 
-          geoLayer.addTo(map);
-
+        // default
+        return L.circleMarker(latlng, {
+          radius: 6,
+          color: "blue"
         });
+      },
 
-    });
+      onEachFeature: function (feature, layer) {
+        if (feature.properties?.name) {
+          layer.bindPopup(feature.properties.name);
+        }
+      }
+
+    }).addTo(map);
+
+    // store layer
+    layerGroups["main"] = {
+      layer: geoLayer,
+      visible: true
+    };
 
   });
 
 
 // -------------------------
-// UI PANEL (LEGEND + CONTROLS)
+// UI PANEL (SIMPLIFIED)
 // -------------------------
-
 function createLayerPanel(layers) {
 
   const panel = L.control({ position: "topright" });
@@ -106,66 +93,37 @@ function createLayerPanel(layers) {
 
     div.innerHTML = "<b>Layers</b><br><br>";
 
-    layers.forEach(layer => {
+    const row = document.createElement("div");
 
-      // SVG ICON
-      let icon = "";
+    row.innerHTML = `
+      <input type="checkbox" id="chk-main" checked>
+      <span>GeoJSON Layer</span>
+      <button id="zoom-main">🔍</button>
+    `;
 
-      if (layer.name === "cities") {
-        icon = `<svg width="12" height="12"><rect width="12" height="12" fill="red"/></svg>`;
-      } else {
-        icon = `<svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="green"/></svg>`;
-      }
+    div.appendChild(row);
 
-      // ROW
-      const row = document.createElement("div");
-      row.style.display = "flex";
-      row.style.alignItems = "center";
-      row.style.marginBottom = "6px";
+    setTimeout(() => {
 
-      row.innerHTML = `
-        <input type="checkbox" id="chk-${layer.id}" checked style="margin-right:5px;">
-        ${icon}
-        <span style="margin-left:5px; flex:1;">${layer.name}</span>
-        <button id="zoom-${layer.id}" style="margin-left:5px; cursor:pointer">🔍</button>
-      `;
+      const chk = document.getElementById("chk-main");
+      const zoomBtn = document.getElementById("zoom-main");
 
-      div.appendChild(row);
+      chk.addEventListener("change", () => {
+        const g = layerGroups["main"];
+        if (!g) return;
 
-      // TOGGLE VISIBILITY
-      setTimeout(() => {
-        const chk = document.getElementById(`chk-${layer.id}`);
+        if (chk.checked) {
+          map.addLayer(g.layer);
+        } else {
+          map.removeLayer(g.layer);
+        }
+      });
 
-        chk.addEventListener("change", () => {
+      zoomBtn.addEventListener("click", () => {
+        map.fitBounds(g.layer.getBounds());
+      });
 
-          const g = layerGroups[layer.id];
-
-          if (!g) return;
-
-          if (chk.checked) {
-            map.addLayer(g.layer);
-          } else {
-            map.removeLayer(g.layer);
-          }
-
-        });
-
-        // ZOOM BUTTON
-        const zoomBtn = document.getElementById(`zoom-${layer.id}`);
-
-        zoomBtn.addEventListener("click", () => {
-
-          const g = layerGroups[layer.id];
-
-          if (g && g.bbox) {
-            map.fitBounds(g.bbox);
-          }
-
-        });
-
-      }, 0);
-
-    });
+    }, 0);
 
     return div;
   };
