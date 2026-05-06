@@ -1,87 +1,68 @@
-from fastapi import FastAPI, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-import json
-import re
-from db import get_db
-
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import create_engine, text
 
 app = FastAPI()
 
+# -------------------------
+# CORS (IMPORTANTE per frontend su VPS)
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # in dev va bene così
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],)
+    allow_headers=["*"],
+)
 
 # -------------------------
-# LAYERS LIST
+# DATABASE CONNECTION
 # -------------------------
+DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/gisdb"
 
+engine = create_engine(DATABASE_URL)
+
+# -------------------------
+# ROOT TEST
+# -------------------------
+@app.get("/")
+def root():
+    return {"status": "WebGIS API running 🚀"}
+
+# -------------------------
+# LAYERS ENDPOINT (GeoJSON)
+# -------------------------
 @app.get("/layers")
-def get_layers(db: Session = Depends(get_db)):
+def get_layers():
+    with engine.connect() as conn:
 
-    result = db.execute(text("""
-        SELECT id, name
-        FROM layers
-        ORDER BY id
-    """))
+        query = text("""
+            SELECT jsonb_build_object(
+                'type', 'FeatureCollection',
+                'features', jsonb_agg(
+                    jsonb_build_object(
+                        'type', 'Feature',
+                        'geometry', ST_AsGeoJSON(geom)::jsonb,
+                        'properties', jsonb_build_object(
+                            'id', id,
+                            'name', name
+                        )
+                    )
+                )
+            )
+            FROM places;
+        """)
 
-    return [
-        {"id": r.id, "name": r.name}
-        for r in result
-    ]
+        result = conn.execute(query).fetchone()
 
+        if result is None or result[0] is None:
+            return {"type": "FeatureCollection", "features": []}
+
+        return result[0]
 
 # -------------------------
-# SINGLE LAYER + FEATURES + BBOX
+# OPTIONAL SIMPLE TEST ENDPOINT
 # -------------------------
-
-@app.get("/layers/{layer_id}")
-def get_layer(layer_id: int, db: Session = Depends(get_db)):
-
-    # FEATURES
-    features = db.execute(text("""
-        SELECT
-            id,
-            name,
-            ST_AsGeoJSON(geom) as geom
-        FROM features
-        WHERE layer_id = :id
-    """), {"id": layer_id})
-
-    # BBOX (PostGIS)
-    bbox_result = db.execute(text("""
-        SELECT ST_Extent(geom)
-        FROM features
-        WHERE layer_id = :id
-    """), {"id": layer_id}).fetchone()
-
-    bbox_raw = bbox_result[0]
-
-    # parse "BOX(minx miny, maxx maxy)"
-    coords = re.findall(r"[-\d.]+", bbox_raw)
-    minx, miny, maxx, maxy = map(float, coords)
-
-    # build GeoJSON
-    geojson = {
-        "type": "FeatureCollection",
-        "features": []
-    }
-
-    for r in features:
-        geojson["features"].append({
-            "type": "Feature",
-            "geometry": json.loads(r.geom),
-            "properties": {
-                "id": r.id,
-                "name": r.name
-            }
-        })
-
-    return {
-        "data": geojson,
-        "bbox": [[miny, minx], [maxy, maxx]]
-    }
+@app.get("/health")
+def health():
+    return {"status": "ok"}
