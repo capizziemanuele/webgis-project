@@ -938,6 +938,89 @@ select option { background: var(--bg-card); }
   display: none;
 }
 
+/* ====== Layer Legend ====== */
+.layer-legend {
+  padding: 4px 12px 8px;
+}
+
+.raster-legend .legend-gradient {
+  height: 9px;
+  border-radius: 3px;
+  width: 100%;
+  margin-bottom: 3px;
+}
+
+.raster-legend .legend-range {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.legend-cm-name {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.vector-legend {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend-circle {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1.5px solid rgba(255,255,255,0.25);
+}
+
+.legend-line {
+  width: 24px; height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legend-polygon {
+  width: 13px; height: 13px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legend-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ====== Layer Reorder Buttons ====== */
+.layer-reorder-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.layer-reorder-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 1px 4px;
+  font-size: 9px;
+  line-height: 1;
+  border-radius: 3px;
+  transition: var(--transition);
+}
+.layer-reorder-btn:hover:not(:disabled) { color: var(--accent); background: rgba(52,152,219,0.1); }
+.layer-reorder-btn:disabled { opacity: 0.2; cursor: default; }
+
+/* Popup scrollable content */
+.popup-scroll {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .sidebar { position: absolute; left: 0; top: 0; bottom: 0; z-index: 200; }

@@ -137,6 +137,100 @@ def get_layer_geojson(layer_id: int, db: Session = Depends(get_db), _=Depends(ge
     })
 
 
+@router.get("/{layer_id}/stats")
+def get_layer_stats(
+    layer_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    layer = db.query(models.Layer).filter(models.Layer.id == layer_id).first()
+    if not layer:
+        raise HTTPException(status_code=404, detail="Layer not found")
+    if layer.layer_type != "raster":
+        raise HTTPException(status_code=400, detail="Stats only available for raster layers")
+    if not layer.file_path or not os.path.exists(layer.file_path):
+        raise HTTPException(status_code=404, detail="Raster file not found")
+
+    import rasterio
+    from rasterio.enums import Resampling as Rsmp
+
+    with rasterio.open(layer.file_path) as src:
+        nodata_val = src.nodata
+        bands_stats = []
+        for band_idx in range(1, min(src.count + 1, 4)):
+            out_h = min(src.height, 512)
+            out_w = min(src.width, 512)
+            data = src.read(
+                band_idx,
+                out_shape=(1, out_h, out_w),
+                resampling=Rsmp.nearest,
+            ).astype(np.float64)[0]
+
+            if nodata_val is not None:
+                mask = np.abs(data - nodata_val) < 1e-6
+            else:
+                mask = np.zeros(data.shape, dtype=bool)
+            valid = data[~mask]
+
+            if len(valid) == 0:
+                bands_stats.append({"band": band_idx, "min": None, "max": None, "mean": None, "std": None, "p2": None, "p98": None})
+                continue
+
+            bands_stats.append({
+                "band": band_idx,
+                "min": float(np.min(valid)),
+                "max": float(np.max(valid)),
+                "mean": float(np.mean(valid)),
+                "std": float(np.std(valid)),
+                "p2": float(np.percentile(valid, 2)),
+                "p98": float(np.percentile(valid, 98)),
+            })
+
+    return {"layer_id": layer_id, "bands": bands_stats}
+
+
+@router.get("/{layer_id}/value")
+def get_raster_value(
+    layer_id: int,
+    lat: float,
+    lon: float,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    layer = db.query(models.Layer).filter(models.Layer.id == layer_id).first()
+    if not layer:
+        raise HTTPException(status_code=404, detail="Layer not found")
+    if layer.layer_type != "raster":
+        raise HTTPException(status_code=400, detail="Value query only for raster layers")
+    if not layer.file_path or not os.path.exists(layer.file_path):
+        raise HTTPException(status_code=404, detail="Raster file not found")
+
+    import rasterio
+    from rasterio.warp import transform as rio_transform
+
+    with rasterio.open(layer.file_path) as src:
+        try:
+            xs, ys = rio_transform("EPSG:4326", src.crs, [lon], [lat])
+            row, col = src.index(xs[0], ys[0])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not project coordinates to raster CRS")
+
+        if row < 0 or col < 0 or row >= src.height or col >= src.width:
+            raise HTTPException(status_code=404, detail="Coordinates outside raster extent")
+
+        values = {}
+        nodata = src.nodata
+        for band_idx in range(1, min(src.count + 1, 5)):
+            data = src.read(band_idx)
+            val = float(data[row, col])
+            if nodata is not None and abs(val - float(nodata)) < 1e-6:
+                values[f"band_{band_idx}"] = None
+            else:
+                values[f"band_{band_idx}"] = val
+
+    return {"layer_id": layer_id, "lat": lat, "lon": lon, "values": values}
+
+
 COLORMAPS = {
     "gray":    lambda v: np.stack([v, v, v], axis=-1),
     "viridis": lambda v: _apply_lut(v, _VIRIDIS_LUT),
@@ -161,6 +255,8 @@ _RDYLGN_LUT = [(0.647,0.000,0.149),(0.843,0.188,0.152),(0.957,0.427,0.263),(0.99
 def get_raster_tile(
     layer_id: int, z: int, x: int, y: int,
     cm: str = "gray",
+    smin: Optional[float] = None,
+    smax: Optional[float] = None,
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -227,10 +323,13 @@ def get_raster_tile(
             valid = band[~nodata_mask]
             if len(valid) == 0:
                 return np.zeros_like(band)
-            p2, p98 = np.percentile(valid, 2), np.percentile(valid, 98)
-            if p98 <= p2:
+            if smin is not None and smax is not None:
+                lo, hi = smin, smax
+            else:
+                lo, hi = np.percentile(valid, 2), np.percentile(valid, 98)
+            if hi <= lo:
                 return np.zeros_like(band)
-            return np.clip((band - p2) / (p98 - p2), 0.0, 1.0)
+            return np.clip((band - lo) / (hi - lo), 0.0, 1.0)
 
         if band_count <= 2:
             # Single band → apply colormap
@@ -330,13 +429,14 @@ async def upload_layer(
                             pass
 
                     for feat in src:
+                        if not feat["geometry"]:
+                            continue
                         props = dict(feat["properties"] or {})
-                        geom = feat["geometry"]
-                        if transformer and geom:
+                        shp_geom = shape(feat["geometry"])
+                        if transformer:
                             from shapely.ops import transform as shp_transform
-                            shp_geom = shape(geom)
-                            transformed = shp_transform(transformer.transform, shp_geom)
-                            geom = mapping(transformed)
+                            shp_geom = shp_transform(transformer.transform, shp_geom)
+                        geom = mapping(shp_geom)
                         features.append({"type": "Feature", "geometry": geom, "properties": props})
 
                 table_name = sanitize_table_name(name)

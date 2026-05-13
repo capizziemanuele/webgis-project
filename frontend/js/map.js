@@ -38,12 +38,33 @@ function initMap() {
   });
 
   // Feature popup on layer click
-  map.on('click', (e) => {
+  map.on('click', async (e) => {
     if (measureMode) return;
+
+    // Check rendered vector features first
     const features = map.queryRenderedFeatures(e.point);
     const layerFeature = features.find(f => f.source && f.source.startsWith('wgis-'));
     if (layerFeature) {
       showFeaturePopup(e, layerFeature);
+      return;
+    }
+
+    // Check raster layers by bbox – query pixel value
+    const { lng, lat } = e.lngLat;
+    const rasterLayers = (window.layerOrder || [])
+      .slice().reverse()
+      .map(id => window.mapLayers[id])
+      .filter(l => l && l.type === 'raster' && l.visible && l.bbox);
+
+    for (const rLayer of rasterLayers) {
+      const [minX, minY, maxX, maxY] = rLayer.bbox;
+      if (lng >= minX && lng <= maxX && lat >= minY && lat <= maxY) {
+        try {
+          const res = await apiFetch(`/api/layers/${rLayer.id}/value?lat=${lat}&lon=${lng}`);
+          if (res.ok) showRasterValuePopup(e, rLayer, await res.json());
+        } catch (_) {}
+        break;
+      }
     }
   });
 
@@ -259,29 +280,57 @@ function formatDistance(meters) {
   return `${(meters / 1000).toFixed(2)} km`;
 }
 
-// ===== Feature Popup =====
+// ===== Feature Popups =====
 function showFeaturePopup(e, feature) {
   const props = feature.properties || {};
-  const important = ['name', 'amenity', 'feature_type', 'osm_id', 'highway', 'shop', 'tourism'];
+  const priority = ['name', 'amenity', 'feature_type', 'highway', 'shop', 'tourism', 'railway'];
+  const skip = ['osm_type'];
   let rows = '';
 
-  // Show important fields first
-  important.forEach(k => {
-    if (props[k]) rows += `<div class="popup-row"><span class="popup-key">${k}:</span><span class="popup-val">${props[k]}</span></div>`;
+  priority.forEach(k => {
+    if (props[k] != null && props[k] !== '') {
+      rows += `<div class="popup-row"><span class="popup-key">${k}</span><span class="popup-val">${props[k]}</span></div>`;
+    }
   });
 
-  // Show other fields
   Object.entries(props).forEach(([k, v]) => {
-    if (!important.includes(k) && v && String(v).length < 100) {
-      rows += `<div class="popup-row"><span class="popup-key">${k}:</span><span class="popup-val">${v}</span></div>`;
+    if (!priority.includes(k) && !skip.includes(k) && v != null && v !== '' && String(v).length < 200) {
+      rows += `<div class="popup-row"><span class="popup-key">${k}</span><span class="popup-val">${v}</span></div>`;
     }
+  });
+
+  if (!rows) rows = '<div style="color:var(--text-muted);font-size:11px;padding:4px 0">No attributes</div>';
+
+  const title = props.name || props.feature_type || 'Feature';
+  new maplibregl.Popup({ maxWidth: '320px', closeButton: true, offset: 10 })
+    .setLngLat(e.lngLat)
+    .setHTML(`<div class="popup-title">${title}</div><div class="popup-scroll">${rows}</div>`)
+    .addTo(map);
+}
+
+function showRasterValuePopup(e, rLayer, data) {
+  const values = data.values || {};
+  const keys = Object.keys(values);
+  let rows = '';
+
+  keys.forEach(k => {
+    const val = values[k];
+    const display = val !== null ? Number(val).toFixed(4) : '<em style="color:var(--text-muted)">NoData</em>';
+    const label = keys.length === 1 ? 'Value' : k.replace('_', ' ');
+    rows += `<div class="popup-row"><span class="popup-key">${label}</span><span class="popup-val">${display}</span></div>`;
   });
 
   if (!rows) return;
 
-  new maplibregl.Popup({ maxWidth: '300px', closeButton: true, offset: 10 })
+  new maplibregl.Popup({ maxWidth: '280px', closeButton: true, offset: 10 })
     .setLngLat(e.lngLat)
-    .setHTML(`<div class="popup-title">${props.name || props.feature_type || feature.layer.id.replace('wgis-', '')}</div>${rows}`)
+    .setHTML(`
+      <div class="popup-title"><i class="fas fa-map" style="font-size:11px;margin-right:4px"></i>${rLayer.name}</div>
+      ${rows}
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;color:var(--text-muted)">
+        ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)}
+      </div>
+    `)
     .addTo(map);
 }
 

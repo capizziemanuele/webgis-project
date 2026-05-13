@@ -1,8 +1,17 @@
 // ===== Layer Management =====
-window.mapLayers = {};  // { layerId: { id, name, type, geomType, style, visible, bbox } }
+window.mapLayers = {};
 window.pendingLayers = [];
+window.layerOrder = []; // [id, ...] bottom-to-top render order
 
-// Load all layers from API on startup
+const RASTER_GRADIENTS = {
+  gray:    'linear-gradient(to right, #000, #fff)',
+  viridis: 'linear-gradient(to right, #440154, #31688e, #35b779, #fde725)',
+  plasma:  'linear-gradient(to right, #0d0887, #7e03a8, #cc4778, #f89441, #f0f921)',
+  hot:     'linear-gradient(to right, #000, #880000, #f00, #ff0, #fff)',
+  terrain: 'linear-gradient(to right, #334099, #3387c8, #66b866, #cccc44, #996633, #fff)',
+  rdylgn:  'linear-gradient(to right, #a50026, #f46d43, #fee08b, #a6d96a, #1a9850)',
+};
+
 async function loadAllLayers() {
   try {
     const res = await apiFetch('/api/layers/');
@@ -30,6 +39,10 @@ async function loadLayer(layerMeta) {
   };
   window.mapLayers[layerMeta.id] = entry;
 
+  if (!window.layerOrder.includes(layerMeta.id)) {
+    window.layerOrder.push(layerMeta.id);
+  }
+
   if (map.loaded()) {
     addLayerToMap(entry);
   } else {
@@ -44,26 +57,28 @@ function addLayerToMap(entry) {
   const sourceId = `wgis-${entry.id}`;
   const layerId = `wgis-layer-${entry.id}`;
 
+  if (map.getLayer(`${layerId}-fill`)) map.removeLayer(`${layerId}-fill`);
   if (map.getLayer(layerId)) map.removeLayer(layerId);
   if (map.getSource(sourceId)) map.removeSource(sourceId);
 
   if (entry.type === 'raster') {
     const colormap = (entry.style && entry.style.colormap) || 'gray';
+    let tileUrl = `${API}/api/layers/${entry.id}/tiles/{z}/{x}/{y}.png?cm=${colormap}`;
+    if (entry.style.smin !== undefined && entry.style.smax !== undefined) {
+      tileUrl += `&smin=${entry.style.smin}&smax=${entry.style.smax}`;
+    }
     map.addSource(sourceId, {
       type: 'raster',
-      tiles: [`${API}/api/layers/${entry.id}/tiles/{z}/{x}/{y}.png?cm=${colormap}`],
+      tiles: [tileUrl],
       tileSize: 256,
     });
     map.addLayer({
       id: layerId,
       type: 'raster',
       source: sourceId,
-      paint: {
-        'raster-opacity': entry.style.opacity ?? 0.8,
-      },
+      paint: { 'raster-opacity': entry.style.opacity ?? 0.8 },
     });
   } else {
-    // Vector / OSM: load GeoJSON
     map.addSource(sourceId, {
       type: 'geojson',
       data: `${API}/api/layers/${entry.id}/geojson`,
@@ -72,7 +87,10 @@ function addLayerToMap(entry) {
     addVectorLayer(sourceId, layerId, entry);
   }
 
-  if (!entry.visible) map.setLayoutProperty(layerId, 'visibility', 'none');
+  if (!entry.visible) {
+    if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'none');
+    if (map.getLayer(`${layerId}-fill`)) map.setLayoutProperty(`${layerId}-fill`, 'visibility', 'none');
+  }
 }
 
 function addVectorLayer(sourceId, layerId, entry) {
@@ -85,7 +103,6 @@ function addVectorLayer(sourceId, layerId, entry) {
 
   if (geomType === 'Point' || geomType === 'Mixed') {
     if (style.iconUrl) {
-      // Custom icon with zoom scaling
       const imgId = `icon-${entry.id}`;
       if (!map.hasImage(imgId)) {
         const img = new Image(64, 64);
@@ -123,17 +140,12 @@ function addVectorLayer(sourceId, layerId, entry) {
       },
     });
   } else if (geomType === 'Polygon') {
-    // Fill layer
     map.addLayer({
       id: `${layerId}-fill`,
       type: 'fill',
       source: sourceId,
-      paint: {
-        'fill-color': fillColor,
-        'fill-opacity': fillOpacity,
-      },
+      paint: { 'fill-color': fillColor, 'fill-opacity': fillOpacity },
     });
-    // Outline
     map.addLayer({
       id: layerId,
       type: 'line',
@@ -180,11 +192,9 @@ function setLayerVisibility(layerId, visible) {
   entry.visible = visible;
 
   const mapLayerId = `wgis-layer-${layerId}`;
-  const fillLayerId = `${mapLayerId}-fill`;
   const vis = visible ? 'visible' : 'none';
-
   if (map.getLayer(mapLayerId)) map.setLayoutProperty(mapLayerId, 'visibility', vis);
-  if (map.getLayer(fillLayerId)) map.setLayoutProperty(fillLayerId, 'visibility', vis);
+  if (map.getLayer(`${mapLayerId}-fill`)) map.setLayoutProperty(`${mapLayerId}-fill`, 'visibility', vis);
 }
 
 function updateLayerStyle(layerId, newStyle) {
@@ -193,16 +203,12 @@ function updateLayerStyle(layerId, newStyle) {
   entry.style = { ...entry.style, ...newStyle };
 
   const mapLayerId = `wgis-layer-${layerId}`;
-  const fillLayerId = `${mapLayerId}-fill`;
-  const sourceId = `wgis-${layerId}`;
   const color = entry.style.color || '#3388ff';
   const opacity = entry.style.opacity ?? 0.8;
 
   try {
     if (entry.type === 'raster') {
-      if (map.getLayer(mapLayerId)) {
-        map.setPaintProperty(mapLayerId, 'raster-opacity', opacity);
-      }
+      if (map.getLayer(mapLayerId)) map.setPaintProperty(mapLayerId, 'raster-opacity', opacity);
     } else if (entry.geomType === 'Point' || !entry.geomType) {
       if (map.getLayer(mapLayerId)) {
         const minR = entry.style.minZoomRadius ?? 4;
@@ -221,9 +227,9 @@ function updateLayerStyle(layerId, newStyle) {
         map.setPaintProperty(mapLayerId, 'line-width', entry.style.weight ?? 2);
       }
     } else if (entry.geomType === 'Polygon') {
-      if (map.getLayer(fillLayerId)) {
-        map.setPaintProperty(fillLayerId, 'fill-color', entry.style.fillColor || color);
-        map.setPaintProperty(fillLayerId, 'fill-opacity', entry.style.fillOpacity ?? 0.5);
+      if (map.getLayer(`${mapLayerId}-fill`)) {
+        map.setPaintProperty(`${mapLayerId}-fill`, 'fill-color', entry.style.fillColor || color);
+        map.setPaintProperty(`${mapLayerId}-fill`, 'fill-opacity', entry.style.fillOpacity ?? 0.5);
       }
       if (map.getLayer(mapLayerId)) {
         map.setPaintProperty(mapLayerId, 'line-color', color);
@@ -232,7 +238,6 @@ function updateLayerStyle(layerId, newStyle) {
     }
   } catch (e) {
     console.warn('Style update error:', e);
-    // Rebuild layer if paint property fails
     addLayerToMap(entry);
   }
 }
@@ -251,22 +256,96 @@ async function deleteLayer(layerId) {
   if (!res.ok) { showToast('Failed to delete layer', 'error'); return; }
 
   const mapLayerId = `wgis-layer-${layerId}`;
-  const fillLayerId = `${mapLayerId}-fill`;
-  const sourceId = `wgis-${layerId}`;
-
   if (map.getLayer(mapLayerId)) map.removeLayer(mapLayerId);
-  if (map.getLayer(fillLayerId)) map.removeLayer(fillLayerId);
-  if (map.getSource(sourceId)) map.removeSource(sourceId);
+  if (map.getLayer(`${mapLayerId}-fill`)) map.removeLayer(`${mapLayerId}-fill`);
+  if (map.getSource(`wgis-${layerId}`)) map.removeSource(`wgis-${layerId}`);
 
   delete window.mapLayers[layerId];
+  window.layerOrder = window.layerOrder.filter(id => id !== layerId);
   renderLayerList();
   showToast('Layer deleted', 'success');
+}
+
+// ===== Layer Reordering =====
+function reapplyMapLayerOrder() {
+  if (!window.layerOrder) return;
+  window.layerOrder.forEach(id => {
+    const mapLayerId = `wgis-layer-${id}`;
+    if (map.getLayer(`${mapLayerId}-fill`)) map.moveLayer(`${mapLayerId}-fill`);
+    if (map.getLayer(mapLayerId)) map.moveLayer(mapLayerId);
+  });
+}
+
+window.moveLayerInList = (layerId, direction) => {
+  if (!window.layerOrder) return;
+  const idx = window.layerOrder.indexOf(layerId);
+  if (idx === -1) return;
+
+  if (direction === 'up' && idx < window.layerOrder.length - 1) {
+    [window.layerOrder[idx], window.layerOrder[idx + 1]] = [window.layerOrder[idx + 1], window.layerOrder[idx]];
+  } else if (direction === 'down' && idx > 0) {
+    [window.layerOrder[idx], window.layerOrder[idx - 1]] = [window.layerOrder[idx - 1], window.layerOrder[idx]];
+  } else {
+    return;
+  }
+
+  reapplyMapLayerOrder();
+  renderLayerList();
+};
+
+// ===== Legend Rendering =====
+function renderLayerLegend(l) {
+  if (l.type === 'raster') {
+    const colormap = l.style.colormap || 'gray';
+    const gradient = RASTER_GRADIENTS[colormap] || RASTER_GRADIENTS.gray;
+    const stats = l._stats && l._stats[0];
+    const dispMin = l.style.smin !== undefined ? l.style.smin : (stats ? stats.p2 : null);
+    const dispMax = l.style.smax !== undefined ? l.style.smax : (stats ? stats.p98 : null);
+    const minLabel = dispMin !== null && dispMin !== undefined ? Number(dispMin).toFixed(2) : 'min';
+    const maxLabel = dispMax !== null && dispMax !== undefined ? Number(dispMax).toFixed(2) : 'max';
+    return `
+      <div class="layer-legend raster-legend">
+        <div class="legend-gradient" style="background:${gradient}"></div>
+        <div class="legend-range">
+          <span>${minLabel}</span>
+          <span class="legend-cm-name">${colormap}</span>
+          <span>${maxLabel}</span>
+        </div>
+      </div>`;
+  } else {
+    const color = l.style.color || '#3388ff';
+    const fillColor = l.style.fillColor || color;
+    const geomType = l.geomType || 'Point';
+    let symbol = '';
+    if (geomType === 'Polygon') {
+      symbol = `<div class="legend-polygon" style="background:${fillColor};border:2px solid ${color}"></div>`;
+    } else if (geomType === 'LineString') {
+      symbol = `<div class="legend-line" style="background:${color}"></div>`;
+    } else {
+      symbol = `<div class="legend-circle" style="background:${color}"></div>`;
+    }
+    const countLabel = l.featureCount > 0 ? `${l.featureCount} feat.` : '';
+    return `
+      <div class="layer-legend vector-legend">
+        ${symbol}
+        <span class="legend-label">${countLabel}</span>
+      </div>`;
+  }
 }
 
 // ===== Layer List Rendering =====
 function renderLayerList() {
   const list = document.getElementById('layerList');
-  const layers = Object.values(window.mapLayers).reverse();
+
+  // Sync layerOrder with mapLayers
+  window.layerOrder = (window.layerOrder || []).filter(id => window.mapLayers[id]);
+  Object.keys(window.mapLayers).forEach(id => {
+    const numId = parseInt(id);
+    if (!window.layerOrder.includes(numId)) window.layerOrder.push(numId);
+  });
+
+  const totalLayers = window.layerOrder.length;
+  const layers = window.layerOrder.slice().reverse().map(id => window.mapLayers[id]).filter(Boolean);
 
   document.getElementById('layerCount').textContent = layers.length;
 
@@ -280,8 +359,11 @@ function renderLayerList() {
   }
 
   list.innerHTML = layers.map(l => {
+    const orderIdx = window.layerOrder.indexOf(l.id);
     const typeClass = { vector: 'badge-vector', raster: 'badge-raster', osm: 'badge-osm' }[l.type] || 'badge-vector';
-    const dotColor = l.style.color || '#3388ff';
+    const dotColor = l.style.color || (l.type === 'raster' ? '#2ecc71' : '#3388ff');
+    const isTop = orderIdx === totalLayers - 1;
+    const isBottom = orderIdx === 0;
     return `
       <div class="layer-item" id="layer-item-${l.id}">
         <div class="layer-header" onclick="toggleLayerExpand(${l.id})">
@@ -291,8 +373,16 @@ function renderLayerList() {
           <div class="layer-color-dot" style="background:${dotColor}"></div>
           <span class="layer-name" title="${l.name}">${l.name}</span>
           <span class="layer-type-badge ${typeClass}">${l.type}</span>
-          <button class="layer-expand-btn" id="expand-btn-${l.id}"><i class="fas fa-chevron-down"></i></button>
+          <div class="layer-reorder-btns" onclick="event.stopPropagation()">
+            <button class="layer-reorder-btn" onclick="moveLayerInList(${l.id},'up')" title="Bring forward" ${isTop ? 'disabled' : ''}>
+              <i class="fas fa-chevron-up"></i>
+            </button>
+            <button class="layer-reorder-btn" onclick="moveLayerInList(${l.id},'down')" title="Send backward" ${isBottom ? 'disabled' : ''}>
+              <i class="fas fa-chevron-down"></i>
+            </button>
+          </div>
         </div>
+        ${renderLayerLegend(l)}
         <div class="layer-controls" id="layer-controls-${l.id}">
           <div class="ctrl-row">
             <span class="ctrl-label">Opacity</span>
@@ -300,7 +390,7 @@ function renderLayerList() {
               oninput="onOpacityChange(${l.id}, this.value)" />
             <span style="font-size:10px;color:var(--text-muted);width:30px">${Math.round((l.style.opacity ?? 0.8) * 100)}%</span>
           </div>
-          <div class="ctrl-row" style="gap:6px">
+          <div class="ctrl-row">
             <div class="layer-action-btns">
               <button class="layer-action-btn" onclick="zoomToLayer(${l.id})" title="Zoom to layer">
                 <i class="fas fa-search-plus"></i> Zoom
@@ -313,7 +403,6 @@ function renderLayerList() {
               </button>
             </div>
           </div>
-          ${l.featureCount > 0 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:4px"><i class="fas fa-info-circle"></i> ${l.featureCount} features</div>` : ''}
         </div>
       </div>
     `;
@@ -322,12 +411,8 @@ function renderLayerList() {
 
 window.toggleLayerExpand = (layerId) => {
   const controls = document.getElementById(`layer-controls-${layerId}`);
-  const btn = document.getElementById(`expand-btn-${layerId}`);
   if (!controls) return;
   controls.classList.toggle('open');
-  btn.innerHTML = controls.classList.contains('open')
-    ? '<i class="fas fa-chevron-up"></i>'
-    : '<i class="fas fa-chevron-down"></i>';
 };
 
 window.toggleLayerVisibility = (layerId) => {
@@ -343,7 +428,6 @@ window.onOpacityChange = async (layerId, value) => {
   const opacity = parseFloat(value);
   entry.style.opacity = opacity;
 
-  // Update visual immediately
   const mapLayerId = `wgis-layer-${layerId}`;
   try {
     if (entry.type === 'raster') {
@@ -353,17 +437,14 @@ window.onOpacityChange = async (layerId, value) => {
     } else if (entry.geomType === 'LineString') {
       map.setPaintProperty(mapLayerId, 'line-opacity', opacity);
     } else if (entry.geomType === 'Polygon') {
-      const fillOpacity = Math.min(opacity, entry.style.fillOpacity ?? 0.5);
-      map.setPaintProperty(`${mapLayerId}-fill`, 'fill-opacity', fillOpacity);
+      map.setPaintProperty(`${mapLayerId}-fill`, 'fill-opacity', Math.min(opacity, entry.style.fillOpacity ?? 0.5));
       map.setPaintProperty(mapLayerId, 'line-opacity', opacity);
     }
-  } catch (e) { }
+  } catch (e) {}
 
-  // Update opacity display
   const opacityLabel = document.querySelector(`#layer-controls-${layerId} input[type=range] + span`);
   if (opacityLabel) opacityLabel.textContent = `${Math.round(opacity * 100)}%`;
 
-  // Save to API (debounced)
   clearTimeout(entry._opacityDebounce);
   entry._opacityDebounce = setTimeout(async () => {
     await apiFetch(`/api/layers/${layerId}/style`, {
@@ -372,6 +453,47 @@ window.onOpacityChange = async (layerId, value) => {
       body: JSON.stringify({ style: entry.style }),
     });
   }, 800);
+};
+
+// ===== Raster Statistics =====
+window.loadRasterStats = async (layerId) => {
+  const display = document.getElementById('sym-stats-display');
+  if (display) display.textContent = 'Loading…';
+  try {
+    const res = await apiFetch(`/api/layers/${layerId}/stats`);
+    if (!res.ok) throw new Error('Failed');
+    const data = await res.json();
+    const band1 = data.bands && data.bands[0];
+    if (band1 && window.mapLayers[layerId]) {
+      window.mapLayers[layerId]._stats = data.bands;
+    }
+    if (band1 && display) {
+      display.textContent = `min:${band1.min?.toFixed(1)} max:${band1.max?.toFixed(1)} p2:${band1.p2?.toFixed(1)} p98:${band1.p98?.toFixed(1)}`;
+    }
+    // Auto-fill stretch values
+    const stretchEl = document.getElementById('sym-stretch');
+    const sminEl = document.getElementById('sym-smin');
+    const smaxEl = document.getElementById('sym-smax');
+    if (band1 && sminEl && smaxEl) {
+      const mode = stretchEl?.value || 'percent';
+      if (mode === 'percent' || mode === 'custom') {
+        sminEl.value = band1.p2?.toFixed(4) ?? '';
+        smaxEl.value = band1.p98?.toFixed(4) ?? '';
+      } else if (mode === 'minmax') {
+        sminEl.value = band1.min?.toFixed(4) ?? '';
+        smaxEl.value = band1.max?.toFixed(4) ?? '';
+      } else if (mode === 'stddev1') {
+        sminEl.value = ((band1.mean ?? 0) - (band1.std ?? 0)).toFixed(4);
+        smaxEl.value = ((band1.mean ?? 0) + (band1.std ?? 0)).toFixed(4);
+      } else if (mode === 'stddev2') {
+        sminEl.value = ((band1.mean ?? 0) - 2 * (band1.std ?? 0)).toFixed(4);
+        smaxEl.value = ((band1.mean ?? 0) + 2 * (band1.std ?? 0)).toFixed(4);
+      }
+      document.getElementById('sym-custom-range').style.display = '';
+    }
+  } catch (e) {
+    if (display) display.textContent = 'Failed to load stats';
+  }
 };
 
 // ===== Symbology Modal =====
@@ -395,25 +517,56 @@ window.openSymbology = (layerId) => {
     <div class="form-group">
       <label>Color Palette</label>
       <select id="sym-colormap">
-        <option value="gray" ${(style.colormap||'gray')==='gray'?'selected':''}>Grayscale</option>
-        <option value="viridis" ${style.colormap==='viridis'?'selected':''}>Viridis (blue→green→yellow)</option>
-        <option value="plasma" ${style.colormap==='plasma'?'selected':''}>Plasma (blue→purple→yellow)</option>
-        <option value="hot" ${style.colormap==='hot'?'selected':''}>Hot (black→red→white)</option>
-        <option value="terrain" ${style.colormap==='terrain'?'selected':''}>Terrain (blue→green→brown→white)</option>
-        <option value="rdylgn" ${style.colormap==='rdylgn'?'selected':''}>Red→Yellow→Green</option>
+        <option value="gray"    ${(style.colormap||'gray')==='gray'   ?'selected':''}>Grayscale</option>
+        <option value="viridis" ${style.colormap==='viridis'          ?'selected':''}>Viridis</option>
+        <option value="plasma"  ${style.colormap==='plasma'           ?'selected':''}>Plasma</option>
+        <option value="hot"     ${style.colormap==='hot'              ?'selected':''}>Hot</option>
+        <option value="terrain" ${style.colormap==='terrain'          ?'selected':''}>Terrain</option>
+        <option value="rdylgn"  ${style.colormap==='rdylgn'           ?'selected':''}>Red→Yellow→Green</option>
       </select>
     </div>
+    <div class="form-group">
+      <label>Stretch Mode</label>
+      <select id="sym-stretch" onchange="document.getElementById('sym-custom-range').style.display=''">
+        <option value="percent"  ${(style.stretch||'percent')==='percent' ?'selected':''}>Percentile 2/98 (auto)</option>
+        <option value="minmax"   ${style.stretch==='minmax'               ?'selected':''}>Min / Max</option>
+        <option value="stddev1"  ${style.stretch==='stddev1'              ?'selected':''}>Std Dev ±1σ</option>
+        <option value="stddev2"  ${style.stretch==='stddev2'              ?'selected':''}>Std Dev ±2σ</option>
+        <option value="custom"   ${style.stretch==='custom'               ?'selected':''}>Custom Range</option>
+      </select>
+    </div>
+    <div class="form-group" style="display:flex;align-items:center;gap:10px">
+      <button type="button" class="btn-secondary btn-sm" onclick="loadRasterStats(${layerId})">
+        <i class="fas fa-chart-bar"></i> Load Statistics
+      </button>
+      <span id="sym-stats-display" style="font-size:10px;color:var(--text-muted);flex:1"></span>
+    </div>
+    <div id="sym-custom-range" style="${style.smin !== undefined ? '' : 'display:none'}">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Min Value</label>
+          <input type="number" id="sym-smin" value="${style.smin ?? ''}" step="any" placeholder="auto" />
+        </div>
+        <div class="form-group">
+          <label>Max Value</label>
+          <input type="number" id="sym-smax" value="${style.smax ?? ''}" step="any" placeholder="auto" />
+        </div>
+      </div>
+    </div>
     ` : ''}
+
     ${!isRaster ? `
     <div class="form-group">
       <label>${isPoint ? 'Point Color' : 'Line/Border Color'}</label>
-      <input type="color" id="sym-color" value="${style.color || '#3388ff'}" style="width:60px;height:36px;background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px;" />
+      <input type="color" id="sym-color" value="${style.color || '#3388ff'}"
+        style="width:60px;height:36px;background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px;" />
     </div>
 
     ${entry.geomType === 'Polygon' ? `
     <div class="form-group">
       <label>Fill Color</label>
-      <input type="color" id="sym-fill-color" value="${style.fillColor || '#3388ff'}" style="width:60px;height:36px;background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px;" />
+      <input type="color" id="sym-fill-color" value="${style.fillColor || '#3388ff'}"
+        style="width:60px;height:36px;background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px;" />
     </div>
     <div class="form-group">
       <label>Fill Opacity</label>
@@ -442,7 +595,7 @@ window.openSymbology = (layerId) => {
     </div>
     ` : ''}
 
-    ${!isPoint && !isRaster ? `
+    ${!isPoint ? `
     <div class="form-group">
       <label>Line Width</label>
       <input type="number" id="sym-weight" value="${style.weight ?? 2}" min="0.5" max="10" step="0.5" />
@@ -473,8 +626,25 @@ window.saveSymbology = async (layerId) => {
   const colormapEl = document.getElementById('sym-colormap');
   if (colormapEl) newStyle.colormap = colormapEl.value;
 
+  const stretchEl = document.getElementById('sym-stretch');
+  if (stretchEl) {
+    newStyle.stretch = stretchEl.value;
+    const sminVal = document.getElementById('sym-smin')?.value;
+    const smaxVal = document.getElementById('sym-smax')?.value;
+    if (sminVal !== '' && sminVal !== undefined && sminVal !== null) {
+      newStyle.smin = parseFloat(sminVal);
+    } else {
+      delete newStyle.smin;
+    }
+    if (smaxVal !== '' && smaxVal !== undefined && smaxVal !== null) {
+      newStyle.smax = parseFloat(smaxVal);
+    } else {
+      delete newStyle.smax;
+    }
+  }
+
   const colorEl = document.getElementById('sym-color');
-  if (colorEl) newStyle.color = colorEl.value;
+  if (colorEl) { newStyle.color = colorEl.value; newStyle.fillColor = colorEl.value; }
 
   const fillColorEl = document.getElementById('sym-fill-color');
   if (fillColorEl) newStyle.fillColor = fillColorEl.value;
@@ -509,7 +679,6 @@ window.saveSymbology = async (layerId) => {
   if (res.ok) {
     if (name) entry.name = name;
     entry.style = newStyle;
-    // Rebuild map layer to apply icon/style changes
     addLayerToMap(entry);
     renderLayerList();
     document.getElementById('symbologyModal').style.display = 'none';
@@ -519,12 +688,10 @@ window.saveSymbology = async (layerId) => {
   }
 };
 
-// Close modals on overlay click
 document.getElementById('symbologyModal').addEventListener('click', (e) => {
   if (e.target === document.getElementById('symbologyModal')) {
     document.getElementById('symbologyModal').style.display = 'none';
   }
 });
 
-// Initialize
 loadAllLayers();
