@@ -13,7 +13,7 @@ async function openOsmModal() {
     try {
       const res = await apiFetch('/api/osm/types');
       const types = await res.json();
-      select.innerHTML = types.map(t => `<option value="${t.key}">${t.label}</option>`).join('');
+      select.innerHTML = types.map(t => `<option value="${t.id}">${t.label}</option>`).join('');
     } catch {
       select.innerHTML = '<option value="hospital">Hospitals</option>';
     }

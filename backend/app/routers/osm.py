@@ -47,7 +47,7 @@ OSM_FEATURE_TYPES = {
 
 @router.get("/types")
 def get_osm_types():
-    return [{"key": k, **v} for k, v in OSM_FEATURE_TYPES.items()]
+    return [{"id": k, "osm_key": v["key"], "value": v["value"], "label": v["label"]} for k, v in OSM_FEATURE_TYPES.items()]
 
 
 @router.post("/query")
