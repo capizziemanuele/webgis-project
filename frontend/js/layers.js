@@ -48,9 +48,10 @@ function addLayerToMap(entry) {
   if (map.getSource(sourceId)) map.removeSource(sourceId);
 
   if (entry.type === 'raster') {
+    const colormap = (entry.style && entry.style.colormap) || 'gray';
     map.addSource(sourceId, {
       type: 'raster',
-      tiles: [`${API}/api/layers/${entry.id}/tiles/{z}/{x}/{y}.png`],
+      tiles: [`${API}/api/layers/${entry.id}/tiles/{z}/{x}/{y}.png?cm=${colormap}`],
       tileSize: 256,
     });
     map.addLayer({
@@ -390,6 +391,19 @@ window.openSymbology = (layerId) => {
       <input type="text" id="sym-name" value="${entry.name}" />
     </div>
 
+    ${isRaster ? `
+    <div class="form-group">
+      <label>Color Palette</label>
+      <select id="sym-colormap">
+        <option value="gray" ${(style.colormap||'gray')==='gray'?'selected':''}>Grayscale</option>
+        <option value="viridis" ${style.colormap==='viridis'?'selected':''}>Viridis (blue→green→yellow)</option>
+        <option value="plasma" ${style.colormap==='plasma'?'selected':''}>Plasma (blue→purple→yellow)</option>
+        <option value="hot" ${style.colormap==='hot'?'selected':''}>Hot (black→red→white)</option>
+        <option value="terrain" ${style.colormap==='terrain'?'selected':''}>Terrain (blue→green→brown→white)</option>
+        <option value="rdylgn" ${style.colormap==='rdylgn'?'selected':''}>Red→Yellow→Green</option>
+      </select>
+    </div>
+    ` : ''}
     ${!isRaster ? `
     <div class="form-group">
       <label>${isPoint ? 'Point Color' : 'Line/Border Color'}</label>
@@ -455,6 +469,9 @@ window.saveSymbology = async (layerId) => {
 
   const name = document.getElementById('sym-name')?.value.trim();
   const newStyle = { ...entry.style };
+
+  const colormapEl = document.getElementById('sym-colormap');
+  if (colormapEl) newStyle.colormap = colormapEl.value;
 
   const colorEl = document.getElementById('sym-color');
   if (colorEl) newStyle.color = colorEl.value;

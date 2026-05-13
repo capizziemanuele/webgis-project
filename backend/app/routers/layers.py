@@ -137,36 +137,65 @@ def get_layer_geojson(layer_id: int, db: Session = Depends(get_db), _=Depends(ge
     })
 
 
+COLORMAPS = {
+    "gray":    lambda v: np.stack([v, v, v], axis=-1),
+    "viridis": lambda v: _apply_lut(v, _VIRIDIS_LUT),
+    "plasma":  lambda v: _apply_lut(v, _PLASMA_LUT),
+    "hot":     lambda v: np.stack([np.clip(v * 3, 0, 1), np.clip(v * 3 - 1, 0, 1), np.clip(v * 3 - 2, 0, 1)], axis=-1),
+    "terrain": lambda v: _apply_lut(v, _TERRAIN_LUT),
+    "rdylgn":  lambda v: _apply_lut(v, _RDYLGN_LUT),
+}
+
+def _apply_lut(v, lut):
+    idx = (np.clip(v, 0, 1) * (len(lut) - 1)).astype(int)
+    return np.array(lut, dtype=np.float32)[idx]
+
+# Compact 16-stop LUTs (RGB 0-1)
+_VIRIDIS_LUT = [(0.267,0.005,0.329),(0.283,0.141,0.458),(0.254,0.265,0.530),(0.207,0.372,0.553),(0.164,0.471,0.558),(0.128,0.566,0.551),(0.135,0.659,0.518),(0.208,0.748,0.473),(0.330,0.831,0.408),(0.477,0.900,0.322),(0.626,0.952,0.223),(0.773,0.984,0.121),(0.902,0.991,0.143),(0.988,0.962,0.373),(0.993,0.906,0.144),(0.993,0.906,0.144)]
+_PLASMA_LUT = [(0.050,0.030,0.527),(0.212,0.019,0.583),(0.354,0.013,0.611),(0.482,0.022,0.615),(0.594,0.065,0.584),(0.690,0.126,0.527),(0.771,0.192,0.455),(0.840,0.261,0.378),(0.897,0.334,0.303),(0.941,0.413,0.228),(0.972,0.499,0.152),(0.990,0.591,0.079),(0.994,0.688,0.041),(0.983,0.791,0.102),(0.957,0.897,0.225),(0.940,0.975,0.131)]
+_TERRAIN_LUT = [(0.200,0.200,0.600),(0.200,0.400,0.800),(0.200,0.600,0.900),(0.400,0.700,0.400),(0.600,0.800,0.400),(0.800,0.850,0.500),(0.700,0.600,0.300),(0.600,0.500,0.300),(0.800,0.700,0.500),(0.900,0.850,0.750),(1.000,1.000,1.000),(1.000,1.000,1.000),(1.000,1.000,1.000),(1.000,1.000,1.000),(1.000,1.000,1.000),(1.000,1.000,1.000)]
+_RDYLGN_LUT = [(0.647,0.000,0.149),(0.843,0.188,0.152),(0.957,0.427,0.263),(0.992,0.682,0.380),(0.996,0.878,0.565),(1.000,1.000,0.749),(0.851,0.937,0.545),(0.651,0.851,0.416),(0.400,0.741,0.388),(0.102,0.596,0.314),(0.000,0.408,0.216),(0.000,0.408,0.216),(0.000,0.408,0.216),(0.000,0.408,0.216),(0.000,0.408,0.216),(0.000,0.408,0.216)]
+
+
 @router.get("/{layer_id}/tiles/{z}/{x}/{y}.png")
-def get_raster_tile(layer_id: int, z: int, x: int, y: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def get_raster_tile(
+    layer_id: int, z: int, x: int, y: int,
+    cm: str = "gray",
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
     layer = db.query(models.Layer).filter(models.Layer.id == layer_id).first()
     if not layer or layer.layer_type != "raster":
         raise HTTPException(status_code=404, detail="Raster layer not found")
     if not layer.file_path or not os.path.exists(layer.file_path):
         raise HTTPException(status_code=404, detail="Raster file not found")
 
+    TILE_SIZE = 256
+
+    def _empty_tile():
+        buf = io.BytesIO()
+        from PIL import Image
+        Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0)).save(buf, "PNG")
+        buf.seek(0)
+        return buf
+
     try:
         import mercantile
         import rasterio
-        from rasterio.warp import reproject, Resampling, calculate_default_transform
+        from rasterio.warp import reproject, Resampling
         from rasterio.crs import CRS
+        from rasterio.transform import from_bounds as rio_from_bounds
         from PIL import Image
 
         tile = mercantile.Tile(x, y, z)
         bounds = mercantile.bounds(tile)
-        TILE_SIZE = 256
+        dst_crs = CRS.from_epsg(4326)
+        dst_transform = rio_from_bounds(bounds.west, bounds.south, bounds.east, bounds.north, TILE_SIZE, TILE_SIZE)
 
         with rasterio.open(layer.file_path) as src:
-            dst_crs = CRS.from_epsg(4326)
-            transform, width, height = calculate_default_transform(
-                src.crs, dst_crs, src.width, src.height, *src.bounds
-            )
-
-            from rasterio.transform import from_bounds as rio_from_bounds
-            dst_transform = rio_from_bounds(bounds.west, bounds.south, bounds.east, bounds.north, TILE_SIZE, TILE_SIZE)
-
             band_count = min(src.count, 4)
-            tile_data = np.zeros((band_count, TILE_SIZE, TILE_SIZE), dtype=np.uint8)
+            nodata_val = src.nodata
+            tile_data = np.zeros((band_count, TILE_SIZE, TILE_SIZE), dtype=np.float64)
 
             for i in range(1, band_count + 1):
                 reproject(
@@ -179,25 +208,59 @@ def get_raster_tile(layer_id: int, z: int, x: int, y: int, db: Session = Depends
                     resampling=Resampling.bilinear,
                 )
 
-            if band_count >= 3:
-                rgb = np.stack([tile_data[0], tile_data[1], tile_data[2]], axis=-1)
-                if band_count == 4:
-                    alpha = tile_data[3]
-                    rgba = np.dstack([rgb, alpha])
-                    img = Image.fromarray(rgba.astype(np.uint8), 'RGBA')
-                else:
-                    img = Image.fromarray(rgb.astype(np.uint8), 'RGB')
-            else:
-                img = Image.fromarray(tile_data[0].astype(np.uint8), 'L')
+        # Build nodata mask (pixels that should be transparent)
+        if nodata_val is not None:
+            nodata_mask = np.all(np.abs(tile_data - nodata_val) < 1e-6, axis=0)
+        else:
+            # No declared nodata: treat all-zero pixels as transparent
+            nodata_mask = np.all(tile_data == 0, axis=0)
 
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            buf.seek(0)
+        # If tile is entirely nodata, return empty transparent tile
+        if nodata_mask.all():
+            return StreamingResponse(_empty_tile(), media_type="image/png",
+                                     headers={"Cache-Control": "no-cache"})
 
-        return StreamingResponse(buf, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+        colormap_name = (layer.style or {}).get("colormap", cm) if cm == "gray" else cm
+        cmap_fn = COLORMAPS.get(colormap_name, COLORMAPS["gray"])
+
+        def percentile_stretch(band):
+            valid = band[~nodata_mask]
+            if len(valid) == 0:
+                return np.zeros_like(band)
+            p2, p98 = np.percentile(valid, 2), np.percentile(valid, 98)
+            if p98 <= p2:
+                return np.zeros_like(band)
+            return np.clip((band - p2) / (p98 - p2), 0.0, 1.0)
+
+        if band_count <= 2:
+            # Single band → apply colormap
+            norm = percentile_stretch(tile_data[0])
+            rgb_f = cmap_fn(norm)  # H x W x 3, values 0-1
+            rgb = (rgb_f * 255).astype(np.uint8)
+            alpha = np.where(nodata_mask, 0, 255).astype(np.uint8)
+            rgba = np.dstack([rgb, alpha])
+        else:
+            # Multi-band RGB(A)
+            r = (percentile_stretch(tile_data[0]) * 255).astype(np.uint8)
+            g = (percentile_stretch(tile_data[1]) * 255).astype(np.uint8)
+            b = (percentile_stretch(tile_data[2]) * 255).astype(np.uint8)
+            alpha = np.where(nodata_mask, 0, 255).astype(np.uint8)
+            if band_count == 4:
+                # Use original alpha channel where it's non-zero
+                src_alpha = tile_data[3].astype(np.uint8)
+                alpha = np.where(nodata_mask, 0, src_alpha)
+            rgba = np.dstack([r, g, b, alpha])
+
+        img = Image.fromarray(rgba.astype(np.uint8), "RGBA")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+
+        return StreamingResponse(buf, media_type="image/png", headers={"Cache-Control": "no-cache"})
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tile generation failed: {str(e)}")
+        return StreamingResponse(_empty_tile(), media_type="image/png",
+                                 headers={"Cache-Control": "no-cache", "X-Error": str(e)[:200]})
 
 
 @router.post("/upload")
@@ -257,11 +320,12 @@ async def upload_layer(
                     import pyproj
                     from shapely.geometry import shape, mapping
                     transformer = None
-                    if src.crs and src.crs.get("init", "").upper() != "EPSG:4326":
+                    if src.crs:
                         try:
-                            src_crs = pyproj.CRS.from_dict(src.crs)
+                            src_crs = pyproj.CRS.from_user_input(src.crs)
                             dst_crs = pyproj.CRS.from_epsg(4326)
-                            transformer = pyproj.Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+                            if not src_crs.equals(dst_crs):
+                                transformer = pyproj.Transformer.from_crs(src_crs, dst_crs, always_xy=True)
                         except Exception:
                             pass
 
