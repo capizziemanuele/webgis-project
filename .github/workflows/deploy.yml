@@ -47,9 +47,10 @@ jobs:
             # Pull latest code
             if [ -d ".git" ]; then
               git fetch origin main
+              git checkout -B main origin/main
               git reset --hard origin/main
             else
-              git clone https://github.com/capizziemanuele/webgis-project.git .
+              git clone -b main https://github.com/capizziemanuele/webgis-project.git .
             fi
 
             # Create .env from secrets if it doesn't exist
