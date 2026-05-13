@@ -51,6 +51,38 @@ async function loadLayer(layerMeta) {
   }
 
   renderLayerList();
+
+  // Auto-load global stats for rasters so legend and tiles use real values
+  if (layerMeta.layer_type === 'raster') {
+    _autoLoadRasterStats(entry);
+  }
+}
+
+async function _autoLoadRasterStats(entry) {
+  if (entry._statsLoaded) return;
+  try {
+    const res = await apiFetch(`/api/layers/${entry.id}/stats`);
+    if (!res.ok) return;
+    const data = await res.json();
+    entry._stats = data.bands;
+    entry._statsLoaded = true;
+
+    // Apply global p2/p98 as smin/smax only if not already set by user
+    const band1 = data.bands && data.bands[0];
+    if (band1 && entry.style.smin === undefined && band1.p2 !== null) {
+      entry.style.smin = band1.p2;
+      entry.style.smax = band1.p98;
+      // Rebuild tile source with correct stretch range
+      addLayerToMap(entry);
+      // Persist to API (silent)
+      apiFetch(`/api/layers/${entry.id}/style`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style: entry.style }),
+      });
+    }
+    renderLayerList();
+  } catch (_) {}
 }
 
 function addLayerToMap(entry) {
@@ -294,23 +326,40 @@ window.moveLayerInList = (layerId, direction) => {
 };
 
 // ===== Legend Rendering =====
+function _fmt(v) {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  if (Math.abs(n) >= 10000 || (Math.abs(n) < 0.01 && n !== 0)) return n.toExponential(2);
+  return n % 1 === 0 ? String(n) : n.toFixed(2);
+}
+
 function renderLayerLegend(l) {
   if (l.type === 'raster') {
     const colormap = l.style.colormap || 'gray';
     const gradient = RASTER_GRADIENTS[colormap] || RASTER_GRADIENTS.gray;
     const stats = l._stats && l._stats[0];
-    const dispMin = l.style.smin !== undefined ? l.style.smin : (stats ? stats.p2 : null);
-    const dispMax = l.style.smax !== undefined ? l.style.smax : (stats ? stats.p98 : null);
-    const minLabel = dispMin !== null && dispMin !== undefined ? Number(dispMin).toFixed(2) : 'min';
-    const maxLabel = dispMax !== null && dispMax !== undefined ? Number(dispMax).toFixed(2) : 'max';
+
+    const lo = l.style.smin !== undefined ? l.style.smin : (stats ? stats.p2 : null);
+    const hi = l.style.smax !== undefined ? l.style.smax : (stats ? stats.p98 : null);
+    const loading = !l._statsLoaded;
+
+    const rangeRow = loading
+      ? `<span class="legend-loading"><i class="fas fa-spinner fa-spin"></i> loading stats…</span>`
+      : `<span>${_fmt(lo)}</span><span class="legend-cm-name">${colormap}</span><span>${_fmt(hi)}</span>`;
+
+    const statsRow = stats
+      ? `<div class="legend-stats-row">
+           <span>min <b>${_fmt(stats.min)}</b></span>
+           <span>max <b>${_fmt(stats.max)}</b></span>
+           <span>mean <b>${_fmt(stats.mean)}</b></span>
+         </div>`
+      : '';
+
     return `
       <div class="layer-legend raster-legend">
         <div class="legend-gradient" style="background:${gradient}"></div>
-        <div class="legend-range">
-          <span>${minLabel}</span>
-          <span class="legend-cm-name">${colormap}</span>
-          <span>${maxLabel}</span>
-        </div>
+        <div class="legend-range">${rangeRow}</div>
+        ${statsRow}
       </div>`;
   } else {
     const color = l.style.color || '#3388ff';
@@ -324,11 +373,11 @@ function renderLayerLegend(l) {
     } else {
       symbol = `<div class="legend-circle" style="background:${color}"></div>`;
     }
-    const countLabel = l.featureCount > 0 ? `${l.featureCount} feat.` : '';
+    const count = l.featureCount > 0 ? `${l.featureCount.toLocaleString()} features` : '';
     return `
       <div class="layer-legend vector-legend">
         ${symbol}
-        <span class="legend-label">${countLabel}</span>
+        <span class="legend-label">${count}</span>
       </div>`;
   }
 }

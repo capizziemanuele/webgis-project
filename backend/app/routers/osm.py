@@ -2,7 +2,6 @@ import json
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import text
 
 from app.database import get_db
 from app.deps import get_current_user
@@ -44,10 +43,88 @@ OSM_FEATURE_TYPES = {
     "stadium": {"key": "leisure", "value": "stadium", "label": "Stadiums"},
 }
 
+_NOMINATIM_UA = "WebGIS/1.0 (educational project; contact@webgis.local)"
+_OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+]
+_OVERPASS_HEADERS = {
+    "User-Agent": _NOMINATIM_UA,
+    "Accept": "application/json, text/json, */*",
+    "Content-Type": "application/x-www-form-urlencoded",
+}
+
 
 @router.get("/types")
 def get_osm_types():
     return [{"id": k, "osm_key": v["key"], "value": v["value"], "label": v["label"]} for k, v in OSM_FEATURE_TYPES.items()]
+
+
+def _build_overpass_query(key: str, value: str, city: str, country: str | None) -> tuple[str, str]:
+    """Return (overpass_ql, method_used) using Nominatim geocoding when possible."""
+    q = f"{city}, {country}" if country else city
+
+    try:
+        with httpx.Client(timeout=12, headers={"User-Agent": _NOMINATIM_UA}, follow_redirects=True) as nc:
+            resp = nc.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": q, "format": "json", "limit": 3, "addressdetails": 0},
+            )
+        if resp.status_code == 200:
+            places = resp.json()
+            # Prefer relations (city/municipality boundaries), then ways, then nodes
+            for osm_type_pref in ("relation", "way", "node"):
+                for place in places:
+                    if place.get("osm_type") != osm_type_pref:
+                        continue
+                    osm_id = place.get("osm_id")
+                    bb = place.get("boundingbox")  # [south, north, west, east]
+
+                    if osm_type_pref == "relation" and osm_id:
+                        area_id = int(osm_id) + 3600000000
+                        return (
+                            f'[out:json][timeout:60];\narea({area_id})->.a;\n'
+                            f'(\n  node["{key}"="{value}"](area.a);\n'
+                            f'  way["{key}"="{value}"](area.a);\n'
+                            f'  relation["{key}"="{value}"](area.a);\n'
+                            f');\nout center tags;',
+                            f"area:{area_id}",
+                        )
+
+                    if osm_type_pref == "way" and osm_id:
+                        area_id = int(osm_id) + 2400000000
+                        return (
+                            f'[out:json][timeout:60];\narea({area_id})->.a;\n'
+                            f'(\n  node["{key}"="{value}"](area.a);\n'
+                            f'  way["{key}"="{value}"](area.a);\n'
+                            f'  relation["{key}"="{value}"](area.a);\n'
+                            f');\nout center tags;',
+                            f"area:{area_id}",
+                        )
+
+                    if bb:
+                        s, n, w, e = bb[0], bb[1], bb[2], bb[3]
+                        return (
+                            f'[out:json][timeout:60];\n'
+                            f'(\n  node["{key}"="{value}"]({s},{w},{n},{e});\n'
+                            f'  way["{key}"="{value}"]({s},{w},{n},{e});\n'
+                            f'  relation["{key}"="{value}"]({s},{w},{n},{e});\n'
+                            f');\nout center tags;',
+                            f"bbox:{s},{w},{n},{e}",
+                        )
+    except Exception:
+        pass
+
+    # Last-resort: area by name
+    return (
+        f'[out:json][timeout:60];\narea["name"="{city}"]->.a;\n'
+        f'(\n  node["{key}"="{value}"](area.a);\n'
+        f'  way["{key}"="{value}"](area.a);\n'
+        f'  relation["{key}"="{value}"](area.a);\n'
+        f');\nout center tags;',
+        "name-fallback",
+    )
 
 
 @router.post("/query")
@@ -60,86 +137,15 @@ def query_osm(
         raise HTTPException(status_code=400, detail=f"Unknown feature type: {request.feature_type}")
 
     feat = OSM_FEATURE_TYPES[request.feature_type]
-    key = feat["key"]
-    value = feat["value"]
-    label = feat["label"]
+    key, value, label = feat["key"], feat["value"], feat["label"]
 
-    city_query = f"{request.city}, {request.country}" if request.country else request.city
-
-    NOMINATIM_UA = "WebGIS/1.0 (educational project; contact@webgis.local)"
-
-    # Step 1: geocode city with Nominatim to get a precise area/bbox
-    overpass_query = None
-    try:
-        with httpx.Client(timeout=15, headers={"User-Agent": NOMINATIM_UA}, follow_redirects=True) as nclient:
-            resp = nclient.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": city_query, "format": "json", "limit": 1, "featuretype": "city,settlement,municipality"},
-            )
-            if resp.status_code == 200:
-                places = resp.json()
-                if places:
-                    place = places[0]
-                    osm_type = place.get("osm_type")
-                    osm_id = place.get("osm_id")
-                    bb = place.get("boundingbox")  # [south, north, west, east]
-
-                    if osm_type == "relation" and osm_id:
-                        area_id = int(osm_id) + 3600000000
-                        overpass_query = f"""
-[out:json][timeout:60];
-area({area_id})->.searchArea;
-(
-  node["{key}"="{value}"](area.searchArea);
-  way["{key}"="{value}"](area.searchArea);
-  relation["{key}"="{value}"](area.searchArea);
-);
-out center tags;
-"""
-                    elif bb:
-                        s, n, w, e = bb[0], bb[1], bb[2], bb[3]
-                        overpass_query = f"""
-[out:json][timeout:60];
-(
-  node["{key}"="{value}"]({s},{w},{n},{e});
-  way["{key}"="{value}"]({s},{w},{n},{e});
-  relation["{key}"="{value}"]({s},{w},{n},{e});
-);
-out center tags;
-"""
-    except Exception:
-        pass
-
-    # Fallback: area by name
-    if not overpass_query:
-        overpass_query = f"""
-[out:json][timeout:60];
-area["name"="{request.city}"]->.searchArea;
-(
-  node["{key}"="{value}"](area.searchArea);
-  way["{key}"="{value}"](area.searchArea);
-  relation["{key}"="{value}"](area.searchArea);
-);
-out center tags;
-"""
-
-    OVERPASS_ENDPOINTS = [
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    ]
-
-    HEADERS = {
-        "User-Agent": "WebGIS/1.0 (educational project; contact@webgis.local)",
-        "Accept": "application/json, text/json, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
+    overpass_query, method_used = _build_overpass_query(key, value, request.city, request.country)
 
     data = None
     last_error = None
-    for endpoint in OVERPASS_ENDPOINTS:
+    for endpoint in _OVERPASS_ENDPOINTS:
         try:
-            with httpx.Client(timeout=90, headers=HEADERS, follow_redirects=True) as client:
+            with httpx.Client(timeout=90, headers=_OVERPASS_HEADERS, follow_redirects=True) as client:
                 response = client.post(endpoint, data={"data": overpass_query})
                 if response.status_code == 200:
                     data = response.json()
@@ -147,15 +153,13 @@ out center tags;
                 last_error = f"HTTP {response.status_code} from {endpoint}"
         except httpx.TimeoutException:
             last_error = f"Timeout on {endpoint}"
-            continue
         except Exception as e:
             last_error = str(e)
-            continue
 
     if data is None:
         raise HTTPException(
             status_code=502,
-            detail=f"All Overpass API endpoints failed. Last error: {last_error}. Try again in a moment.",
+            detail=f"All Overpass endpoints failed. Last error: {last_error}",
         )
 
     elements = data.get("elements", [])
@@ -165,24 +169,17 @@ out center tags;
         el_type = el.get("type")
 
         if el_type == "node":
-            lon = el.get("lon")
-            lat = el.get("lat")
+            lon, lat = el.get("lon"), el.get("lat")
         elif el_type in ("way", "relation"):
             center = el.get("center", {})
-            lon = center.get("lon")
-            lat = center.get("lat")
+            lon, lat = center.get("lon"), center.get("lat")
         else:
             continue
 
         if lon is None or lat is None:
             continue
 
-        props = {
-            "osm_id": el.get("id"),
-            "osm_type": el_type,
-            "name": tags.get("name", ""),
-            "feature_type": request.feature_type,
-        }
+        props = {"osm_id": el.get("id"), "osm_type": el_type, "name": tags.get("name", ""), "feature_type": request.feature_type}
         props.update(tags)
 
         features.append({
@@ -192,7 +189,13 @@ out center tags;
         })
 
     if not features:
-        raise HTTPException(status_code=404, detail=f"No {label} found in {request.city}. Try a different city name (use English name).")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No {label} found in '{request.city}' (query method: {method_used}). "
+                f"Try adding the country, e.g. 'Magenta, Italy', or check the English spelling."
+            ),
+        )
 
     layer_name = request.layer_name or f"{label} - {request.city}"
     table_name = sanitize_table_name(layer_name)
@@ -222,11 +225,7 @@ out center tags;
         feature_count=len(features),
         created_by=current_user.id,
         style=default_style,
-        source_info={
-            "city": request.city,
-            "feature_type": request.feature_type,
-            "osm_label": label,
-        },
+        source_info={"city": request.city, "feature_type": request.feature_type, "osm_label": label, "query_method": method_used},
     )
     db.add(layer)
     db.commit()
