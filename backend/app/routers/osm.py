@@ -64,11 +64,55 @@ def query_osm(
     value = feat["value"]
     label = feat["label"]
 
-    city_query = request.city
-    if request.country:
-        city_query = f"{request.city}, {request.country}"
+    city_query = f"{request.city}, {request.country}" if request.country else request.city
 
-    overpass_query = f"""
+    NOMINATIM_UA = "WebGIS/1.0 (educational project; contact@webgis.local)"
+
+    # Step 1: geocode city with Nominatim to get a precise area/bbox
+    overpass_query = None
+    try:
+        with httpx.Client(timeout=15, headers={"User-Agent": NOMINATIM_UA}, follow_redirects=True) as nclient:
+            resp = nclient.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": city_query, "format": "json", "limit": 1, "featuretype": "city,settlement,municipality"},
+            )
+            if resp.status_code == 200:
+                places = resp.json()
+                if places:
+                    place = places[0]
+                    osm_type = place.get("osm_type")
+                    osm_id = place.get("osm_id")
+                    bb = place.get("boundingbox")  # [south, north, west, east]
+
+                    if osm_type == "relation" and osm_id:
+                        area_id = int(osm_id) + 3600000000
+                        overpass_query = f"""
+[out:json][timeout:60];
+area({area_id})->.searchArea;
+(
+  node["{key}"="{value}"](area.searchArea);
+  way["{key}"="{value}"](area.searchArea);
+  relation["{key}"="{value}"](area.searchArea);
+);
+out center tags;
+"""
+                    elif bb:
+                        s, n, w, e = bb[0], bb[1], bb[2], bb[3]
+                        overpass_query = f"""
+[out:json][timeout:60];
+(
+  node["{key}"="{value}"]({s},{w},{n},{e});
+  way["{key}"="{value}"]({s},{w},{n},{e});
+  relation["{key}"="{value}"]({s},{w},{n},{e});
+);
+out center tags;
+"""
+    except Exception:
+        pass
+
+    # Fallback: area by name
+    if not overpass_query:
+        overpass_query = f"""
 [out:json][timeout:60];
 area["name"="{request.city}"]->.searchArea;
 (
