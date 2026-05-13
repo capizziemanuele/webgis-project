@@ -1,0 +1,78 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script: |
+            set -e
+
+            # Install Docker if not present
+            if ! command -v docker &>/dev/null; then
+              echo "Installing Docker..."
+              curl -fsSL https://get.docker.com | sh
+              systemctl enable docker
+              systemctl start docker
+            fi
+
+            # Install Docker Compose plugin if not present
+            if ! docker compose version &>/dev/null; then
+              echo "Installing Docker Compose plugin..."
+              mkdir -p /usr/local/lib/docker/cli-plugins
+              curl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 \
+                -o /usr/local/lib/docker/cli-plugins/docker-compose
+              chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            fi
+
+            # Set up application directory
+            APP_DIR="/opt/webgis"
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+
+            # Pull latest code
+            if [ -d ".git" ]; then
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              git clone https://github.com/capizziemanuele/webgis-project.git .
+            fi
+
+            # Create .env from secrets if it doesn't exist
+            if [ ! -f ".env" ]; then
+              cat > .env <<ENVEOF
+            POSTGRES_DB=webgis
+            POSTGRES_USER=webgis_user
+            POSTGRES_PASSWORD=${{ secrets.DB_PASSWORD }}
+            SECRET_KEY=${{ secrets.SECRET_KEY }}
+            FIRST_ADMIN_USERNAME=admin
+            FIRST_ADMIN_EMAIL=admin@webgis.local
+            FIRST_ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+            ENVEOF
+            fi
+
+            # Build and restart containers
+            docker compose pull --ignore-pull-failures || true
+            docker compose build --no-cache
+            docker compose down --remove-orphans
+            docker compose up -d
+
+            # Health check
+            echo "Waiting for services..."
+            sleep 15
+            docker compose ps
+            echo "Deployment complete!"

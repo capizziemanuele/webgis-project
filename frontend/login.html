@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebGIS — Login</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .bg-map {
+      position: fixed;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 20% 50%, rgba(52, 152, 219, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 80% 20%, rgba(46, 204, 113, 0.1) 0%, transparent 40%);
+      pointer-events: none;
+    }
+
+    .grid-overlay {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+    }
+
+    .login-card {
+      position: relative;
+      background: rgba(15, 20, 35, 0.85);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 48px 40px;
+      width: 420px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+      justify-content: center;
+    }
+
+    .logo-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #3498db, #2ecc71);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      color: white;
+    }
+
+    .logo-text {
+      font-size: 26px;
+      font-weight: 700;
+      color: white;
+      letter-spacing: -0.5px;
+    }
+
+    .logo-text span {
+      color: #3498db;
+    }
+
+    h2 {
+      color: rgba(255,255,255,0.7);
+      font-size: 14px;
+      font-weight: 400;
+      text-align: center;
+      margin-bottom: 32px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      color: rgba(255,255,255,0.6);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-wrapper i {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: rgba(255,255,255,0.3);
+      font-size: 14px;
+    }
+
+    input {
+      width: 100%;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      padding: 14px 14px 14px 42px;
+      color: white;
+      font-size: 15px;
+      transition: all 0.2s;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #3498db;
+      background: rgba(52, 152, 219, 0.1);
+      box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.15);
+    }
+
+    input::placeholder { color: rgba(255,255,255,0.25); }
+
+    .btn-login {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #3498db, #2980b9);
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 8px;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-login:hover { background: linear-gradient(135deg, #2980b9, #2471a3); transform: translateY(-1px); box-shadow: 0 8px 25px rgba(52, 152, 219, 0.4); }
+    .btn-login:active { transform: translateY(0); }
+
+    .btn-login .spinner {
+      display: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin: 0 auto;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-msg {
+      background: rgba(231, 76, 60, 0.2);
+      border: 1px solid rgba(231, 76, 60, 0.4);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #e74c3c;
+      font-size: 13px;
+      margin-top: 16px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .features {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+    }
+
+    .feature-item {
+      text-align: center;
+      color: rgba(255,255,255,0.4);
+      font-size: 11px;
+    }
+
+    .feature-item i {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 4px;
+      color: rgba(52, 152, 219, 0.7);
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-map"></div>
+  <div class="grid-overlay"></div>
+
+  <div class="login-card">
+    <div class="logo">
+      <div class="logo-icon"><i class="fas fa-globe"></i></div>
+      <div class="logo-text">Web<span>GIS</span></div>
+    </div>
+    <h2>Sign in to your account</h2>
+
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <div class="input-wrapper">
+          <i class="fas fa-user"></i>
+          <input type="text" id="username" placeholder="Enter your username" autocomplete="username" required />
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <div class="input-wrapper">
+          <i class="fas fa-lock"></i>
+          <input type="password" id="password" placeholder="Enter your password" autocomplete="current-password" required />
+        </div>
+      </div>
+      <button type="submit" class="btn-login" id="loginBtn">
+        <span class="btn-text">Sign In <i class="fas fa-arrow-right"></i></span>
+        <div class="spinner" id="loginSpinner"></div>
+      </button>
+      <div class="error-msg" id="errorMsg">
+        <i class="fas fa-exclamation-circle"></i>
+        <span id="errorText"></span>
+      </div>
+    </form>
+
+    <div class="features">
+      <div class="feature-item"><i class="fas fa-map-marked-alt"></i>Multi-layer maps</div>
+      <div class="feature-item"><i class="fas fa-database"></i>PostGIS backend</div>
+      <div class="feature-item"><i class="fas fa-download"></i>OSM data</div>
+    </div>
+  </div>
+
+  <script>
+    const API = window.location.origin;
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      const spinner = document.getElementById('loginSpinner');
+      const btnText = btn.querySelector('.btn-text');
+      const errorDiv = document.getElementById('errorMsg');
+      const errorText = document.getElementById('errorText');
+
+      btn.disabled = true;
+      btnText.style.display = 'none';
+      spinner.style.display = 'block';
+      errorDiv.style.display = 'none';
+
+      try {
+        const res = await fetch(`${API}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          localStorage.setItem('webgis_token', data.access_token);
+          localStorage.setItem('webgis_user', JSON.stringify(data.user));
+          window.location.href = '/index.html';
+        } else {
+          const err = await res.json();
+          errorText.textContent = err.detail || 'Invalid credentials';
+          errorDiv.style.display = 'flex';
+        }
+      } catch (err) {
+        errorText.textContent = 'Connection error. Please try again.';
+        errorDiv.style.display = 'flex';
+      } finally {
+        btn.disabled = false;
+        btnText.style.display = 'inline';
+        spinner.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebGIS Platform</title>
+
+  <!-- MapLibre GL JS -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.3.0/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@4.3.0/dist/maplibre-gl.js"></script>
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+
+  <!-- Pickr color picker -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@simonwep/pickr/dist/themes/nano.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@simonwep/pickr/dist/pickr.min.js"></script>
+
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="topbar-left">
+    <button class="sidebar-toggle" id="sidebarToggle" title="Toggle panel">
+      <i class="fas fa-bars"></i>
+    </button>
+    <div class="brand">
+      <i class="fas fa-globe brand-icon"></i>
+      <span class="brand-name">Web<strong>GIS</strong></span>
+    </div>
+  </div>
+
+  <div class="topbar-center">
+    <div class="search-box">
+      <i class="fas fa-search search-icon"></i>
+      <input type="text" id="geocodeInput" placeholder="Search for a place..." autocomplete="off" />
+      <button id="geocodeBtn" title="Search"><i class="fas fa-arrow-right"></i></button>
+      <div id="geocodeSuggestions" class="suggestions-dropdown"></div>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <button class="topbar-btn" id="basemapBtn" title="Change basemap">
+      <i class="fas fa-layer-group"></i>
+      <span>Basemap</span>
+    </button>
+    <button class="topbar-btn" id="coordsToggle" title="Copy coordinates">
+      <i class="fas fa-crosshairs"></i>
+      <span id="coordsDisplay">0.000, 0.000</span>
+    </button>
+    <div class="user-menu">
+      <button class="user-btn" id="userMenuBtn">
+        <div class="user-avatar" id="userAvatar">U</div>
+        <span id="userNameDisplay">User</span>
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="user-dropdown" id="userDropdown">
+        <div class="user-info" id="userInfoDropdown">
+          <div class="user-avatar-lg" id="userAvatarLg">U</div>
+          <div>
+            <div id="dropdownUsername">Username</div>
+            <div id="dropdownEmail" style="color:rgba(255,255,255,0.5);font-size:12px"></div>
+          </div>
+        </div>
+        <hr class="dropdown-divider" />
+        <button class="dropdown-item" id="adminPanelBtn" style="display:none">
+          <i class="fas fa-users-cog"></i> Admin Panel
+        </button>
+        <button class="dropdown-item danger" id="logoutBtn">
+          <i class="fas fa-sign-out-alt"></i> Sign Out
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- MAIN CONTENT -->
+<div class="app-body">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+
+    <!-- TOOLS SECTION -->
+    <div class="sidebar-section">
+      <div class="section-title">Tools</div>
+      <div class="tools-grid">
+        <button class="tool-btn" id="osmQueryBtn" title="Fetch OSM Features">
+          <i class="fas fa-cloud-download-alt"></i>
+          <span>OSM Data</span>
+        </button>
+        <button class="tool-btn" id="uploadBtn" title="Upload Vector/Raster">
+          <i class="fas fa-upload"></i>
+          <span>Upload</span>
+        </button>
+        <button class="tool-btn" id="zoomExtentBtn" title="Zoom to world extent">
+          <i class="fas fa-expand-arrows-alt"></i>
+          <span>World View</span>
+        </button>
+        <button class="tool-btn" id="measureBtn" title="Measure distance">
+          <i class="fas fa-ruler"></i>
+          <span>Measure</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- LAYERS SECTION -->
+    <div class="sidebar-section layers-section">
+      <div class="section-header">
+        <div class="section-title">Layers</div>
+        <span class="layer-count" id="layerCount">0</span>
+      </div>
+      <div id="layerList" class="layer-list">
+        <div class="empty-state">
+          <i class="fas fa-layer-group"></i>
+          <p>No layers yet.<br>Upload data or fetch from OSM.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- BASEMAP LEGEND -->
+    <div class="sidebar-section">
+      <div class="section-title">Current Basemap</div>
+      <div class="current-basemap" id="currentBasemapName">OpenStreetMap</div>
+    </div>
+  </aside>
+
+  <!-- MAP -->
+  <main class="map-container">
+    <div id="map"></div>
+
+    <!-- Map controls -->
+    <div class="map-controls">
+      <button class="map-ctrl-btn" id="zoomInBtn" title="Zoom in"><i class="fas fa-plus"></i></button>
+      <button class="map-ctrl-btn" id="zoomOutBtn" title="Zoom out"><i class="fas fa-minus"></i></button>
+      <button class="map-ctrl-btn" id="locateBtn" title="My location"><i class="fas fa-location-arrow"></i></button>
+      <button class="map-ctrl-btn" id="fullscreenBtn" title="Fullscreen"><i class="fas fa-expand"></i></button>
+    </div>
+
+    <!-- Feature popup -->
+    <div id="featurePopup" class="feature-popup" style="display:none"></div>
+  </main>
+</div>
+
+<!-- BASEMAP SELECTOR PANEL -->
+<div class="panel-overlay" id="basemapPanel" style="display:none">
+  <div class="basemap-panel">
+    <div class="panel-header">
+      <span>Select Basemap</span>
+      <button class="close-btn" onclick="document.getElementById('basemapPanel').style.display='none'">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="basemap-grid" id="basemapGrid"></div>
+  </div>
+</div>
+
+<!-- OSM QUERY MODAL -->
+<div class="modal-overlay" id="osmModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title"><i class="fas fa-cloud-download-alt"></i> Fetch OSM Features</div>
+      <button class="close-btn" id="osmModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>City Name</label>
+          <input type="text" id="osmCity" placeholder="e.g. Rome, London, Paris..." />
+        </div>
+        <div class="form-group">
+          <label>Feature Type</label>
+          <select id="osmFeatureType"></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Layer Name (optional)</label>
+        <input type="text" id="osmLayerName" placeholder="Auto-generated from city + type" />
+      </div>
+
+      <div class="symbology-section">
+        <div class="section-title" style="margin-bottom:12px">Symbology</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Color</label>
+            <div id="osmColorPicker" class="color-picker-wrapper"></div>
+          </div>
+          <div class="form-group">
+            <label>Min Radius (zoom 8)</label>
+            <input type="number" id="osmMinRadius" value="4" min="1" max="20" />
+          </div>
+          <div class="form-group">
+            <label>Max Radius (zoom 18)</label>
+            <input type="number" id="osmMaxRadius" value="16" min="4" max="40" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Custom Icon URL (optional — SVG/PNG)</label>
+          <input type="text" id="osmIconUrl" placeholder="https://example.com/icon.svg" />
+        </div>
+        <div class="check-group">
+          <input type="checkbox" id="osmZoomScaling" checked />
+          <label for="osmZoomScaling">Scale marker size with zoom level</label>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-secondary" id="osmModalCancel">Cancel</button>
+        <button class="btn-primary" id="osmFetchBtn">
+          <i class="fas fa-download"></i> Fetch Features
+        </button>
+      </div>
+      <div id="osmStatus" class="status-msg" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- UPLOAD MODAL -->
+<div class="modal-overlay" id="uploadModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title"><i class="fas fa-upload"></i> Upload Layer</div>
+      <button class="close-btn" id="uploadModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Layer Name</label>
+        <input type="text" id="uploadName" placeholder="My Layer" />
+      </div>
+      <div class="form-group">
+        <label>Description (optional)</label>
+        <input type="text" id="uploadDesc" placeholder="Brief description..." />
+      </div>
+      <div class="form-group">
+        <label>File</label>
+        <div class="file-drop-zone" id="dropZone">
+          <i class="fas fa-cloud-upload-alt"></i>
+          <p>Drag & drop or <strong>click to browse</strong></p>
+          <p class="file-types">GeoJSON · Shapefile (ZIP) · KML · GeoTIFF</p>
+          <input type="file" id="uploadFile" accept=".geojson,.json,.zip,.kml,.tif,.tiff,.geotiff" style="display:none" />
+        </div>
+        <div id="selectedFileName" class="selected-file" style="display:none"></div>
+      </div>
+      <div class="upload-progress" id="uploadProgress" style="display:none">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <span id="progressText">Uploading...</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="uploadModalCancel">Cancel</button>
+        <button class="btn-primary" id="uploadSubmitBtn">
+          <i class="fas fa-upload"></i> Upload
+        </button>
+      </div>
+      <div id="uploadStatus" class="status-msg" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- SYMBOLOGY MODAL -->
+<div class="modal-overlay" id="symbologyModal" style="display:none">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title"><i class="fas fa-palette"></i> Edit Symbology</div>
+      <button class="close-btn" id="symbologyClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body" id="symbologyBody"></div>
+  </div>
+</div>
+
+<!-- ADMIN PANEL MODAL -->
+<div class="modal-overlay" id="adminModal" style="display:none">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <div class="modal-title"><i class="fas fa-users-cog"></i> User Management</div>
+      <button class="close-btn" id="adminModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="admin-toolbar">
+        <button class="btn-primary btn-sm" id="addUserBtn">
+          <i class="fas fa-user-plus"></i> Add User
+        </button>
+      </div>
+      <div id="userTableWrapper">
+        <table class="data-table">
+          <thead>
+            <tr><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th></tr>
+          </thead>
+          <tbody id="userTableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Add user form -->
+      <div id="addUserForm" style="display:none" class="add-user-form">
+        <div class="section-title" style="margin-bottom:16px">New User</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="newUsername" placeholder="username" />
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="newEmail" placeholder="user@example.com" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="newPassword" placeholder="••••••••" />
+          </div>
+          <div class="form-group" style="padding-top:24px">
+            <div class="check-group">
+              <input type="checkbox" id="newIsAdmin" />
+              <label for="newIsAdmin">Admin user</label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary btn-sm" id="cancelAddUser">Cancel</button>
+          <button class="btn-primary btn-sm" id="saveNewUser">
+            <i class="fas fa-save"></i> Create User
+          </button>
+        </div>
+      </div>
+      <div id="adminStatus" class="status-msg" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST NOTIFICATIONS -->
+<div id="toastContainer" class="toast-container"></div>
+
+<!-- JS Modules -->
+<script src="/js/config.js"></script>
+<script src="/js/auth.js"></script>
+<script src="/js/map.js"></script>
+<script src="/js/geocoding.js"></script>
+<script src="/js/layers.js"></script>
+<script src="/js/osm.js"></script>
+<script src="/js/upload.js"></script>
+</body>
+</html>
