@@ -79,18 +79,40 @@ area["name"="{request.city}"]->.searchArea;
 out center tags;
 """
 
-    try:
-        with httpx.Client(timeout=90) as client:
-            response = client.post(
-                "https://overpass-api.de/api/interpreter",
-                data={"data": overpass_query},
-            )
-            response.raise_for_status()
-            data = response.json()
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Overpass API timeout. Try a smaller city or different feature type.")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Overpass API error: {str(e)}")
+    OVERPASS_ENDPOINTS = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ]
+
+    HEADERS = {
+        "User-Agent": "WebGIS/1.0 (educational project; contact@webgis.local)",
+        "Accept": "application/json, text/json, */*",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    data = None
+    last_error = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            with httpx.Client(timeout=90, headers=HEADERS, follow_redirects=True) as client:
+                response = client.post(endpoint, data={"data": overpass_query})
+                if response.status_code == 200:
+                    data = response.json()
+                    break
+                last_error = f"HTTP {response.status_code} from {endpoint}"
+        except httpx.TimeoutException:
+            last_error = f"Timeout on {endpoint}"
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    if data is None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"All Overpass API endpoints failed. Last error: {last_error}. Try again in a moment.",
+        )
 
     elements = data.get("elements", [])
     features = []
